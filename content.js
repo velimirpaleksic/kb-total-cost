@@ -1,5 +1,7 @@
 (() => {
   "use strict";
+  if (window.top !== window.self) return;
+
   const CARD_ID = "kb-total-cost-card";
   const TOTAL_RE = /total\s*(?:cost|price)\s*:?/i;
   const MONEY_RE = /(?:US\s*\$|USD|€|EUR|CN\s*¥|CNY|RMB|¥|￥|£|GBP|KM|BAM)\s*([\d.,]+)|([\d.,]+)\s*(?:US\s*\$|USD|€|EUR|CNY|RMB|元|£|GBP|KM|BAM)/i;
@@ -9,7 +11,11 @@
   function parseMoney(text) {
     const match = String(text || "").replace(/\u00a0/g, " ").match(MONEY_RE);
     if (!match) return null;
-    const value = Number((match[1] || match[2]).replace(/,/g, ""));
+    let raw = (match[1] || match[2]).trim();
+    if (raw.includes(",") && raw.includes(".")) raw = raw.replace(/,/g, "");
+    else if (/^\d{1,3}(?:\.\d{3})+,\d{1,2}$/.test(raw)) raw = raw.replace(/\./g, "").replace(",", ".");
+    else raw = raw.replace(/,/g, "");
+    const value = Number(raw);
     if (!Number.isFinite(value)) return null;
     const token = match[0].replace(/[\d.,\s]/g, "").toUpperCase();
     let currency = "";
@@ -29,36 +35,37 @@
   }
 
   function findTotals() {
-    const candidates = [];
-    for (const element of document.querySelectorAll("body *")) {
-      if (!isVisible(element) || element.children.length > 10) continue;
-      const text = (element.textContent || "").replace(/\s+/g, " ").trim();
-      const labelIndex = text.search(TOTAL_RE);
-      if (labelIndex < 0 || text.length > 240) continue;
-      const afterLabel = text.slice(labelIndex).replace(TOTAL_RE, "").trim();
-      const money = parseMoney(afterLabel);
-      if (money) candidates.push({ element, ...money });
+    const found = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (!TOTAL_RE.test(node.nodeValue || "")) continue;
+      const labelElement = node.parentElement;
+      if (!isVisible(labelElement)) continue;
+
+      let container = labelElement;
+      let money = null;
+      for (let depth = 0; depth < 5 && container; depth += 1) {
+        const text = (container.textContent || "").replace(/\s+/g, " ").trim();
+        const labelIndex = text.search(TOTAL_RE);
+        const afterLabel = labelIndex >= 0 ? text.slice(labelIndex).replace(TOTAL_RE, "").trim() : "";
+        money = parseMoney(afterLabel);
+        if (money) break;
+        container = container.parentElement;
+      }
+      if (!money || !container || (container.textContent || "").length > 500) continue;
+      const box = labelElement.getBoundingClientRect();
+      found.push({ ...money, x: box.left, y: box.top });
     }
 
-    const leaves = candidates.filter(candidate =>
-      !candidates.some(other => other !== candidate && candidate.element.contains(other.element))
+    return found.filter((item, index, list) =>
+      list.findIndex(other => other.currency === item.currency && other.value === item.value &&
+        Math.abs(other.x - item.x) < 3 && Math.abs(other.y - item.y) < 3) === index
     );
-    const unique = [];
-    for (const candidate of leaves) {
-      const box = candidate.element.getBoundingClientRect();
-      const duplicate = unique.some(item =>
-        item.currency === candidate.currency && item.value === candidate.value &&
-        Math.abs(item.y - box.top) < 3 && Math.abs(item.x - box.left) < 3
-      );
-      if (!duplicate) unique.push({ ...candidate, x: box.left, y: box.top });
-    }
-    return unique;
   }
 
   function formatAmount(value, currency) {
-    return new Intl.NumberFormat("bs-BA", {
-      style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: 2
-    }).format(value);
+    return new Intl.NumberFormat("bs-BA", { style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
   }
 
   async function rateToBam(currency) {
@@ -99,25 +106,20 @@
     card.querySelector(".kb-amount").textContent = formatAmount(totalValue, currency);
     const note = card.querySelector(".kb-note");
     note.textContent = "Preračunavam u BAM…";
-    try {
-      note.textContent = formatAmount(totalValue * await rateToBam(currency), "BAM");
-    } catch {
-      note.textContent = "BAM kurs trenutno nije dostupan";
-    }
+    try { note.textContent = formatAmount(totalValue * await rateToBam(currency), "BAM"); }
+    catch { note.textContent = "BAM kurs trenutno nije dostupan"; }
   }
 
   function scheduleUpdate() {
     if (scheduled) return;
     scheduled = true;
-    setTimeout(update, 100);
+    setTimeout(update, 120);
   }
 
   getCard().style.display = "none";
   update();
-  new MutationObserver(scheduleUpdate).observe(document.body, {
-    childList: true, subtree: true, characterData: true, attributes: true,
-    attributeFilter: ["class", "checked", "value"]
-  });
-  addEventListener("click", () => setTimeout(scheduleUpdate, 80), true);
+  new MutationObserver(scheduleUpdate).observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["class", "checked", "value"] });
+  addEventListener("click", () => setTimeout(scheduleUpdate, 100), true);
   addEventListener("input", scheduleUpdate, true);
+  setInterval(scheduleUpdate, 2000);
 })();
