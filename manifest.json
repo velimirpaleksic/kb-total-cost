@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Kakobuy Total Cost",
+  "version": "1.2.0",
+  "description": "Sabira Kakobuy Total Price iznose i prikazuje zbir u originalnoj valuti i BAM.",
+  "host_permissions": ["https://api.frankfurter.app/*"],
+  "content_scripts": [{
+    "matches": ["https://www.kakobuy.com/center/cart*", "https://kakobuy.com/center/cart*"],
+    "js": ["content.js"],
+    "css": ["styles.css"],
+    "run_at": "document_idle"
+  }]
+}
